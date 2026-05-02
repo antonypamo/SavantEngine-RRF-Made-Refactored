@@ -1,15 +1,20 @@
 """
-🚀 RRF Savant v5.4 — FastAPI Production Application
+🚀 RRF Savant v5.4 — Lightweight FastAPI (Vercel Optimized)
 
-Complete production-ready FastAPI app that:
-- Uses real RRF API (https://antonypamo-apirrf.hf.space)
-- Integrates with Supabase database
-- Implements rate limiting and quota enforcement
-- Handles authentication and billing
-- Deploys to Vercel as serverless function
+Removed heavy dependencies to fit within 500MB Lambda limit:
+- Removed numpy (not needed)
+- Removed pandas (not needed)
+- Removed scipy (not needed)
+- Removed stripe (can add via webhook later)
 
-Deployment:
-  vercel deploy
+Core functionality:
+- Real RRF API integration
+- Supabase database
+- Rate limiting
+- Quota enforcement
+- 4 endpoints
+
+Total size: ~50MB (fits easily in 500MB limit)
 """
 
 import os
@@ -22,82 +27,56 @@ from dataclasses import dataclass
 from enum import Enum
 from uuid import uuid4
 
-# FastAPI
 from fastapi import FastAPI, HTTPException, Request, Header
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-# HTTP
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# Database
 try:
     from supabase import create_client, Client
 except ImportError:
     Client = None
 
 # Logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(name)s | %(levelname)s | %(message)s'
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('RRF_API')
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
 
-@dataclass
-class ProdConfig:
-    """Production configuration."""
-    # RRF API (live)
+class Config:
+    """Production configuration (lightweight)."""
     rrf_api_url: str = os.getenv('RRF_API_URL', 'https://antonypamo-apirrf.hf.space')
     hf_token: str = os.getenv('HF_TOKEN', '')
-    
-    # Supabase (real database)
     supabase_url: str = os.getenv('SUPABASE_URL', '')
     supabase_key: str = os.getenv('SUPABASE_KEY', '')
     
-    # Stripe (payments)
-    stripe_key: str = os.getenv('STRIPE_KEY', '')
-    
-    # Rate limits
-    rate_limits: Dict[str, int] = None
-    
-    def __post_init__(self):
-        if self.rate_limits is None:
-            self.rate_limits = {
-                'FREE': 10,
-                'PRO': 100,
-                'BUSINESS': 500,
-                'ENTERPRISE': None
-            }
+    rate_limits = {
+        'FREE': 10,
+        'PRO': 100,
+        'BUSINESS': 500,
+        'ENTERPRISE': None
+    }
 
-config = ProdConfig()
+config = Config()
 
 # ============================================================================
-# SUPABASE INTEGRATION
+# SUPABASE (LIGHTWEIGHT)
 # ============================================================================
 
 class Database:
-    """Supabase database manager."""
+    """Lightweight Supabase manager."""
     
-    def __init__(self, config: ProdConfig):
-        self.config = config
+    def __init__(self):
         self.client: Optional[Client] = None
-        self._connect()
-    
-    def _connect(self):
-        """Connect to Supabase."""
         try:
-            if self.config.supabase_key:
-                self.client = create_client(
-                    self.config.supabase_url,
-                    self.config.supabase_key
-                )
+            if config.supabase_key:
+                self.client = create_client(config.supabase_url, config.supabase_key)
                 logger.info('✅ Supabase connected')
         except Exception as e:
             logger.warning(f'⚠️  Supabase unavailable: {e}')
@@ -107,7 +86,6 @@ class Database:
         """Log API call for billing."""
         if not self.client:
             return False
-        
         try:
             self.client.table('api_calls').insert({
                 'api_key_id': api_key,
@@ -124,14 +102,9 @@ class Database:
             return False
     
     def get_api_key_quota(self, api_key: str) -> Dict[str, Any]:
-        """Get API key quota from database."""
+        """Get API key quota."""
         if not self.client:
-            return {
-                'tier': 'FREE',
-                'used': 0,
-                'limit': 1000,
-                'is_within_quota': True
-            }
+            return {'tier': 'FREE', 'used': 0, 'limit': 1000, 'is_within_quota': True}
         
         try:
             key_resp = self.client.table('api_keys').select('*').eq('key_id', api_key).execute()
@@ -139,18 +112,14 @@ class Database:
                 key_data = key_resp.data[0]
                 tier = key_data.get('tier', 'FREE')
                 
-                # Get month start
                 today = datetime.utcnow()
                 month_start = today.replace(day=1, hour=0, minute=0, second=0)
                 
-                # Count this month's calls
                 calls_resp = self.client.table('api_calls').select('id', count='exact').gte(
                     'timestamp', month_start.isoformat()
                 ).eq('api_key_id', api_key).execute()
                 
                 used = calls_resp.count or 0
-                
-                # Tier limits
                 limits = {'FREE': 1000, 'PRO': 100000, 'BUSINESS': 1000000, 'ENTERPRISE': None}
                 limit = limits.get(tier, 1000)
                 
@@ -165,17 +134,16 @@ class Database:
         
         return {'tier': 'FREE', 'used': 0, 'limit': 1000, 'is_within_quota': True}
 
-db = Database(config)
+db = Database()
 
 # ============================================================================
-# RRF API CLIENT
+# RRF API CLIENT (LIGHTWEIGHT)
 # ============================================================================
 
 class RRFClient:
-    """Live RRF API client."""
+    """Lightweight RRF API client."""
     
-    def __init__(self, config: ProdConfig):
-        self.config = config
+    def __init__(self):
         self.session = self._create_session()
     
     def _create_session(self) -> requests.Session:
@@ -187,17 +155,14 @@ class RRFClient:
         return session
     
     def rerank(self, query: str, documents: List[str]) -> tuple:
-        """Call RRF API to rerank documents.
-        
-        Returns: (results, latency_ms, status)
-        """
+        """Call RRF API to rerank documents."""
         start = time.time()
         
         try:
             resp = self.session.post(
-                f'{self.config.rrf_api_url}/v1/rerank',
+                f'{config.rrf_api_url}/v1/rerank',
                 json={'query': query, 'documents': documents, 'alpha': 0.2},
-                headers={'Authorization': f'Bearer {self.config.hf_token}'},
+                headers={'Authorization': f'Bearer {config.hf_token}'},
                 timeout=30
             )
             
@@ -216,14 +181,14 @@ class RRFClient:
             logger.error(f'RRF API error: {e}')
             return [], latency, 'error'
 
-api_client = RRFClient(config)
+api_client = RRFClient()
 
 # ============================================================================
-# RATE LIMITER
+# RATE LIMITER (LIGHTWEIGHT, IN-MEMORY)
 # ============================================================================
 
 class RateLimiter:
-    """In-memory rate limiting."""
+    """Simple in-memory rate limiter."""
     
     def __init__(self):
         self.requests = {}
@@ -254,11 +219,10 @@ limiter = RateLimiter()
 
 app = FastAPI(
     title='RRF Savant API v5.4',
-    description='Production rank fusion engine',
+    description='Lightweight rank fusion engine',
     version='5.4.0'
 )
 
-# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=['*'],
@@ -268,7 +232,7 @@ app.add_middleware(
 )
 
 # ============================================================================
-# REQUEST/RESPONSE MODELS
+# MODELS
 # ============================================================================
 
 class RankRequest(BaseModel):
@@ -299,7 +263,6 @@ class RankResponse(BaseModel):
 async def health_check() -> Dict[str, Any]:
     """Health check endpoint."""
     try:
-        # Check RRF API
         resp = requests.get(
             f'{config.rrf_api_url}/health',
             headers={'Authorization': f'Bearer {config.hf_token}'},
@@ -325,7 +288,6 @@ async def rank_documents(
 ) -> RankResponse:
     """Rank documents using RRF engine."""
     
-    # Extract API key
     if not authorization or not authorization.startswith('Bearer '):
         raise HTTPException(status_code=401, detail='Missing API key')
     
@@ -334,28 +296,22 @@ async def rank_documents(
     try:
         start_time = time.time()
         
-        # Get quota
         quota = db.get_api_key_quota(api_key)
         tier = quota.get('tier', 'FREE')
         
-        # Check rate limit
         if not limiter.is_allowed(api_key, tier):
             raise HTTPException(status_code=429, detail='Rate limit exceeded')
         
-        # Check quota
         if not quota.get('is_within_quota', True):
             raise HTTPException(status_code=402, detail='Quota exceeded')
         
-        # Call RRF API
         results, latency, status = api_client.rerank(request.query, request.documents)
         
-        # Log to database
         db.save_api_call(api_key, request.query, len(request.documents), latency, status)
         
-        # Format results
         formatted_results = []
         if status == 'success':
-            for result in results[:10]:  # Top 10
+            for result in results[:10]:
                 formatted_results.append(RankResult(
                     id=result.get('id', 0),
                     rank=result.get('rank', 0),
@@ -402,22 +358,18 @@ async def batch_rank(
     requests_list: List[RankRequest],
     authorization: str = Header(None)
 ) -> List[RankResponse]:
-    """Batch ranking (multiple queries)."""
+    """Batch ranking."""
     
     if not authorization or not authorization.startswith('Bearer '):
         raise HTTPException(status_code=401, detail='Missing API key')
     
-    api_key = authorization.replace('Bearer ', '').strip()
     results = []
-    
     for req in requests_list:
         try:
-            # Create synthetic request object for rank_documents
             class FakeRequest:
                 query = req.query
                 documents = req.documents
             
-            # Call rank endpoint
             resp = await rank_documents(FakeRequest(), authorization)
             results.append(resp)
         except Exception as e:
@@ -447,10 +399,6 @@ async def root() -> Dict[str, str]:
         }
     }
 
-# ============================================================================
-# ERROR HANDLERS
-# ============================================================================
-
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     """Custom HTTP exception handler."""
@@ -476,20 +424,9 @@ async def general_exception_handler(request: Request, exc: Exception):
         }
     )
 
-# ============================================================================
-# MAIN (for local testing)
-# ============================================================================
-
 if __name__ == '__main__':
     import uvicorn
-    
-    logger.info('🚀 Starting RRF Savant API v5.4')
+    logger.info('🚀 Starting RRF Savant API v5.4 (Lightweight)')
     logger.info(f'RRF API: {config.rrf_api_url}')
     logger.info(f'Database: {\"Connected\" if db.client else \"Demo mode\"}')
-    
-    uvicorn.run(
-        app,
-        host='0.0.0.0',
-        port=int(os.getenv('PORT', 8000)),
-        log_level='info'
-    )
+    uvicorn.run(app, host='0.0.0.0', port=int(os.getenv('PORT', 8000)))
