@@ -1,13 +1,27 @@
-app = FastAPI(
-    title='RRF Savant API v5.4',
-    description='Production rank fusion engine',
-    version='5.4.0'
-)
+from fastapi import FastAPI
+import requests
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=['*'],
-    allow_credentials=True,
-    allow_methods=['*'],
-    allow_headers=['*']
-)
+app = FastAPI()
+
+BACKEND_URL = "https://antonypamo-apirrf.hf.space/evaluate"
+
+@app.get("/")
+def root():
+    return {"status": "proxy_alive"}
+
+@app.post("/")
+async def evaluate(req: dict):
+    try:
+        response = requests.post(
+            BACKEND_URL,
+            json=req,
+            timeout=25
+        )
+
+        return response.json()
+
+    except Exception as e:
+        return {
+            "error": str(e),
+            "type": "proxy_error"
+        }
