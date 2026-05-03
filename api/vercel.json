@@ -13,7 +13,6 @@
     }
   ],
   "env": {
-    "RRF_API_URL": "@rrf_api_url",
     "HF_TOKEN": "@hf_token",
     "SUPABASE_URL": "@supabase_url",
     "SUPABASE_KEY": "@supabase_key",
