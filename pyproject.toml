@@ -1,4 +1,4 @@
-app = FastAPI(
+@app = FastAPI(
     title='RRF Savant API v5.4',
     description='Production rank fusion engine',
     version='5.4.0'
